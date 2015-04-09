@@ -1,0 +1,244 @@
+extern "C" {
+#include "global.h"
+#include "module_support.h"
+#include "program.h"
+#include "interpret.h"
+#include "builtin_functions.h"
+#include "pike_threadlib.h"
+}
+
+#include <ceres/ceres.h>
+
+extern "C" {
+DECLARATIONS
+}
+
+typedef int int32;
+typedef unsigned int uint32;
+
+class PikeCostFunction: public ceres::CostFunction 
+{
+ public:
+  explicit PikeCostFunction(struct svalue *pike_cb,
+			    const std::vector<int32> block_sizes,
+			    const int32 num_residuals)
+  {
+    mark_free_svalue (&pike_cb_);
+    assign_svalue (&pike_cb_, pike_cb);
+    set_num_residuals (num_residuals);
+
+    std::vector<int32>* block_sizes_ = mutable_parameter_block_sizes();
+    *block_sizes_ = block_sizes;
+  }
+
+  virtual ~PikeCostFunction() {
+    free_svalue (&pike_cb_);
+    mark_free_svalue (&pike_cb_);
+  }
+
+  virtual bool Evaluate(double const* const* parameters,
+                        double* residuals,
+                        double** jacobians) const {
+    const std::vector<int32> block_sizes = parameter_block_sizes();
+    for (unsigned int i = 0; i < block_sizes.size(); i++) {
+      int block_size = block_sizes[i];
+      for (int j = 0; j < block_size; j++)
+	push_float (parameters[i][j]);
+      f_aggregate (block_size);
+    }
+    f_aggregate (block_sizes.size());
+
+    struct array *res_arr = allocate_array (num_residuals());
+    ref_push_array (res_arr);
+
+    int args = 2;
+
+    struct array *jac_arr = NULL;
+
+    if (jacobians != NULL) {     
+      for (unsigned int i = 0; i < block_sizes.size(); i++) {
+	if (jacobians[i] == NULL) {
+	  push_int (0);
+	  continue;
+	}
+
+	int block_size = block_sizes[i];
+	
+	for (int j = 0; j < num_residuals(); ++j) {
+	  for (int k = 0; k < block_size; ++k)
+	    push_float (0.0);
+	  f_aggregate (block_size);
+	}
+	f_aggregate (num_residuals());
+      }
+      f_aggregate (block_sizes.size());
+
+      jac_arr = Pike_sp[-1].u.array;
+      add_ref (jac_arr);
+      args++;
+    }
+
+    struct svalue *pike_cb = (svalue *)&pike_cb_;
+    apply_svalue (pike_cb, args);
+
+    pop_n_elems(1);
+
+    struct svalue res_sval;
+    mark_free_svalue (&res_sval);
+    for (int i = 0; i < res_arr->size; i++) {
+      array_index(&res_sval, res_arr, i);
+      if (TYPEOF (res_sval) != T_FLOAT)
+	Pike_error ("Residuals must be floats.\n");
+      residuals[i] = res_sval.u.float_number;
+    }
+    free_svalue (&res_sval);
+    
+    free_array (res_arr);
+
+    if (jac_arr != NULL) {
+      struct svalue a1;
+      mark_free_svalue (&a1);
+      for (int i = 0; i < jac_arr->size; i++) {
+	array_index (&a1, jac_arr, i);
+	if (TYPEOF (a1) == T_INT && a1.u.integer == 0)
+	  continue; // No Jacobian matrix for this parameter block.
+	else if (TYPEOF (a1) != T_ARRAY)
+	  Pike_error ("Jacobian must be a three-dimensional array of floats.\n");
+
+	struct svalue a2;
+	mark_free_svalue (&a2);
+	for (int j = 0; j < a1.u.array->size; j++) {
+	  array_index (&a2, a1.u.array, j);
+	  if (TYPEOF (a2) != T_ARRAY)
+	    Pike_error ("Jacobian must be a three-dimensional array of floats.\n");
+
+	  struct svalue a3;
+	  mark_free_svalue (&a3);
+	  for (int k = 0; k < a2.u.array->size; k++) {
+	    array_index (&a3, a2.u.array, k);
+	    if (TYPEOF (a3) != T_FLOAT)
+	      Pike_error ("Jacobian must be a three-dimensional array of floats.\n");
+	    jacobians[i][j * block_sizes[i] + k] = a3.u.float_number;
+	  }
+	  free_svalue (&a3);
+	}
+	free_svalue (&a2);
+      }
+      free_svalue (&a1);
+      free_array (jac_arr);
+    }
+
+    return true;
+  }
+ 
+ protected:
+  struct svalue pike_cb_;
+};
+
+PIKECLASS Problem {
+  PIKEVAR function evaluate_cb;
+  PIKEVAR array parameters;
+  PIKEVAR int num_residuals;
+
+  PIKEFUN void create (function(array,array,array:void) evaluate_cb, 
+		       array(array(float)) parameters, 
+		       int num_residuals)
+  {
+    assign_svalue (&THIS->evaluate_cb, evaluate_cb);
+
+    if (THIS->parameters) {
+      free_array (THIS->parameters);
+      THIS->parameters = NULL;
+    }
+
+    THIS->parameters = parameters;
+    add_ref (THIS->parameters);
+    THIS->num_residuals = num_residuals;
+  }
+
+  PIKEFUN array solve()
+  {
+    // Build the problem.
+    ceres::Problem problem;
+
+    std::vector<double*> param_blocks;
+    std::vector<int> block_sizes;
+
+    struct array *param_arr = THIS->parameters;
+
+    add_ref (param_arr);
+
+    for (int i = 0; i < param_arr->size; i++) {
+      struct svalue a1;
+      array_index_no_free (&a1, param_arr, i);
+      if (TYPEOF (a1) != T_ARRAY)
+        Pike_error ("Initial parameters must be array(array(float)).\n");
+
+      int a1_elems = a1.u.array->size;
+
+      double *params = 
+	reinterpret_cast<double *>(malloc (sizeof (double) * a1_elems));
+
+      for (int j = 0; j < a1_elems; j++) {
+	struct svalue a2;
+	array_index_no_free (&a2, a1.u.array, j);
+	if (TYPEOF (a2) != T_FLOAT)
+	  Pike_error ("Initial parameters must be array(array(float)).\n");
+	params[j] = a2.u.float_number;
+      }
+
+      param_blocks.push_back (params);
+      block_sizes.push_back (a1_elems);
+    }
+
+    free_array (param_arr);
+
+    // Set up the only cost function (also known as residual).
+    PikeCostFunction* cost_function = 
+      new PikeCostFunction (&THIS->evaluate_cb, block_sizes, 
+			    THIS->num_residuals);
+    problem.AddResidualBlock(cost_function, NULL, param_blocks);
+
+    ceres::Solver::Options options;
+    options.minimizer_progress_to_stdout = false;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    for (unsigned int i = 0; i < param_blocks.size(); i++) {
+      int block_size = block_sizes[i];
+      for (int j = 0; j < block_size; j++)
+	push_float (param_blocks[i][j]);
+      f_aggregate (block_size);
+    }
+    f_aggregate (param_blocks.size());
+  }
+
+  INIT
+  {
+    mark_free_svalue (&THIS->evaluate_cb);
+    if (THIS->parameters) {
+      free_array (THIS->parameters);
+      THIS->parameters = NULL;
+    }
+  }
+
+  EXIT
+  {
+    if (THIS->parameters) {
+      free_array (THIS->parameters);
+      THIS->parameters = NULL;
+    }
+  }
+}
+
+extern "C" {
+PIKE_MODULE_INIT
+{
+  INIT;
+}
+
+PIKE_MODULE_EXIT
+{
+  EXIT;
+}
+}
