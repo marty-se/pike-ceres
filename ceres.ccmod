@@ -55,15 +55,19 @@ public:
 #endif
   };
 
-  TreeNode (FunctionType func_type, TreeNode *child)
+  explicit TreeNode (T value) : value_(value)
+  {
+    node_type_ = SCALAR_NODE;
+  }
+
+  TreeNode (FunctionType func_type, TreeNode* child)
     : func_type_(func_type), left_child_(child)
   {
     node_type_ = FUNCTION_NODE;
     left_child_->AddRef();
   }
 
-  TreeNode (FunctionType func_type, TreeNode *left_child,
-	    TreeNode *right_child)
+  TreeNode (FunctionType func_type, TreeNode* left_child, TreeNode* right_child)
     : func_type_(func_type), left_child_(left_child), right_child_(right_child)
   {
     node_type_ = FUNCTION_NODE;
@@ -71,7 +75,7 @@ public:
     right_child_->AddRef();
   }
 
-  TreeNode (OperatorType op_type, TreeNode *left_child, TreeNode *right_child)
+  TreeNode (OperatorType op_type, TreeNode* left_child, TreeNode* right_child)
     : op_type_(op_type), left_child_(left_child), right_child_(right_child)
   {
     node_type_ = OPERATOR_NODE;
@@ -83,12 +87,6 @@ public:
     : param_block_(param_block), param_block_index_(param_block_index)
   {
     node_type_ = PARAMETER_NODE;
-  }
-
-  explicit TreeNode (T value)
-    : value_(value)
-  {
-    node_type_ = SCALAR_NODE;
   }
 
   ~TreeNode()
@@ -129,7 +127,6 @@ public:
   }
 
 protected:
-
   template <typename TEval>
   TEval EvalFunction (TEval const* const* param_blocks,
 		      const std::vector<int32>& block_sizes)
@@ -224,11 +221,11 @@ protected:
   FunctionType func_type_;
   OperatorType op_type_;
 
-  TreeNode *left_child_ = NULL;
-  TreeNode *right_child_ = NULL;
+  TreeNode* left_child_ = NULL;
+  TreeNode* right_child_ = NULL;
 
-  int param_block_;
-  int param_block_index_;
+  unsigned int param_block_;
+  unsigned int param_block_index_;
 
   T value_;
 };
@@ -239,7 +236,8 @@ static const int kStride = 10;
 
 struct PikeCostFunctor {
 public:
-  typedef ceres::DynamicAutoDiffCostFunction<PikeCostFunctor, kStride> PikeDynamicCostFunction;
+  typedef ceres::DynamicAutoDiffCostFunction<PikeCostFunctor, kStride>
+  PikeDynamicCostFunction;
 
   PikeCostFunctor (const std::vector<int32> block_sizes,
 		   const std::vector<DoubleTreeNode*> expr_trees) :
@@ -262,9 +260,9 @@ public:
   Create (const std::vector<int32>& block_sizes,
 	  const std::vector<DoubleTreeNode*>& expr_trees)
   {
-    PikeCostFunctor *functor =
+    PikeCostFunctor* functor =
       new PikeCostFunctor (block_sizes, expr_trees);
-    PikeDynamicCostFunction *cost_function =
+    PikeDynamicCostFunction* cost_function =
       new PikeDynamicCostFunction (functor);
 
     for (auto const &it : block_sizes) {
@@ -280,13 +278,13 @@ private:
 };
 
 PIKECLASS Operand {
-  CVAR DoubleTreeNode *expr_node;
+  CVAR DoubleTreeNode* expr_node;
   CVAR int param_block;
   CVAR int param_block_index;
 
   DoubleTreeNode* build_tree_from_svalues
     (DoubleTreeNode::OperatorType op_type,
-     const std::vector<struct svalue *> &svals)
+     const std::vector<struct svalue*> &svals)
   {
     DoubleTreeNode* root = NULL;
     for (auto *it : svals) {
@@ -294,9 +292,9 @@ PIKECLASS Operand {
       DoubleTreeNode *new_node = NULL;
       if (TYPEOF (*op_sval) == T_OBJECT &&
 	  op_sval->u.object->prog == Ceres_Operand_program) {
-	struct object *op = op_sval->u.object;
-	struct Ceres_Operand_struct *op_struct =
-	  (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+	struct object* op = op_sval->u.object;
+	struct Ceres_Operand_struct* op_struct =
+	  (Ceres_Operand_struct*)get_storage (op, Ceres_Operand_program);
 	new_node = op_struct->expr_node;
 	if (new_node == NULL) {
 	  new_node = new DoubleTreeNode (op_struct->param_block,
@@ -326,14 +324,14 @@ PIKECLASS Operand {
 		  DoubleTreeNode::OperatorType op_type,
 		  OpSide op_side)
   {
-    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
-    struct Ceres_Operand_struct *new_op_struct =
-      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+    struct object* new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct* new_op_struct =
+      (Ceres_Operand_struct*)get_storage (new_operand, Ceres_Operand_program);
 
     struct svalue my_svalue;
     SET_SVAL (my_svalue, T_OBJECT, 0, object, Pike_fp->current_object);
 
-    std::vector<struct svalue *> svalues;
+    std::vector<struct svalue*> svalues;
 
     if (op_side == OP_LEFT)
       svalues.push_back (&my_svalue);
@@ -424,9 +422,9 @@ PIKECLASS ParameterBlock {
     if (index < 0 || index >= THIS->size)
       Pike_error ("Index out of range.\n");
 
-    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
-    struct Ceres_Operand_struct *new_op_struct =
-      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+    struct object* new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct* new_op_struct =
+      (Ceres_Operand_struct*)get_storage (new_operand, Ceres_Operand_program);
 
     new_op_struct->expr_node =
       new DoubleTreeNode (THIS->param_block_idx, index);
@@ -459,9 +457,9 @@ PIKECLASS ResidualBlock {
     DoubleTreeNode* new_node;
     if (TYPEOF (*value) == T_OBJECT &&
 	value->u.object->prog == Ceres_Operand_program) {
-      struct object *op = value->u.object;
-      struct Ceres_Operand_struct *op_struct =
-      (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+      struct object* op = value->u.object;
+      struct Ceres_Operand_struct* op_struct =
+      (Ceres_Operand_struct*)get_storage (op, Ceres_Operand_program);
       new_node = op_struct->expr_node;
       if (new_node == NULL) {
 	throw;
@@ -490,8 +488,10 @@ PIKECLASS ResidualBlock {
   {
     std::vector<DoubleTreeNode*>* expr_trees = THIS->expr_trees;
     for (auto const &it : *expr_trees) {
-      DoubleTreeNode* node = it;
-      node->SubRef();
+      if (it != NULL) {
+	DoubleTreeNode* node = it;
+	node->SubRef();
+      }
     }
     delete expr_trees;
   }
@@ -505,24 +505,24 @@ PIKECLASS CostFunction {
 
   void handle_func (INT32 args, DoubleTreeNode::FunctionType func_type)
   {
-    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
-    struct Ceres_Operand_struct *new_op_struct =
-      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+    struct object* new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct* new_op_struct =
+      (Ceres_Operand_struct*)get_storage (new_operand, Ceres_Operand_program);
 
     if (args > 2) Pike_error ("Too many arguments.\n");
 
-    DoubleTreeNode *left_node = NULL;
-    DoubleTreeNode *right_node = NULL;
+    DoubleTreeNode* left_node = NULL;
+    DoubleTreeNode* right_node = NULL;
 
     for (int i = 0; i < args; i++) {
       struct svalue op_sval = Pike_sp[i-args];
 
-      DoubleTreeNode *new_node = NULL;
+      DoubleTreeNode* new_node = NULL;
       if (TYPEOF (op_sval) == T_OBJECT &&
 	  op_sval.u.object->prog == Ceres_Operand_program) {
-	struct object *op = op_sval.u.object;
-	struct Ceres_Operand_struct *op_struct =
-	  (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+	struct object* op = op_sval.u.object;
+	struct Ceres_Operand_struct* op_struct =
+	  (Ceres_Operand_struct*)get_storage (op, Ceres_Operand_program);
 	new_node = op_struct->expr_node;
 	if (new_node == NULL) {
 	  new_node = new DoubleTreeNode (op_struct->param_block,
@@ -632,13 +632,16 @@ PIKECLASS AutoDiffSolver {
     free_svalue (&tmp_sval);
 
     apply (cost_function, "evaluate", 1);
+
+    stack_pop_n_elems_keep_top (args);
+
     struct svalue res_sval = Pike_sp[-1];
 
     if (TYPEOF (res_sval) == T_OBJECT &&
 	res_sval.u.object->prog == Ceres_ResidualBlock_program) {
-      struct object *res_obj = res_sval.u.object;
-      struct Ceres_ResidualBlock_struct *res_struct =
-      (Ceres_ResidualBlock_struct *)get_storage (res_obj,
+      struct object* res_obj = res_sval.u.object;
+      struct Ceres_ResidualBlock_struct* res_struct =
+      (Ceres_ResidualBlock_struct*)get_storage (res_obj,
 						 Ceres_ResidualBlock_program);
       std::vector<DoubleTreeNode*> expr_trees = *res_struct->expr_trees;
 
