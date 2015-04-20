@@ -206,11 +206,9 @@ protected:
   TEval EvalParameter (TEval const* const* param_blocks,
 		       const std::vector<int32>& block_sizes)
   {
-#ifdef DEBUG
-    if (param_block_index_ < 0 ||
-	param_block_index_ > block_sizes.at (param_block_))
+    if (param_block_ >= block_sizes.size() ||
+	param_block_index_ >= block_sizes.at (param_block_))
       throw;
-#endif
 
     return param_blocks[param_block_][param_block_index_];
   }
@@ -447,11 +445,12 @@ PIKECLASS ResidualBlock {
   PIKEFUN void create (int size)
   {
     THIS->size = size;
+    THIS->expr_trees->resize (size);
   }
 
   PIKEFUN object `[]=(int index, int|float|object value)
   {
-    if (index < 0 || index > THIS->size)
+    if (index < 0 || index >= THIS->size)
       Pike_error ("Index out of range.\n");
 
     DoubleTreeNode* new_node;
@@ -472,7 +471,7 @@ PIKECLASS ResidualBlock {
       SIMPLE_BAD_ARG_ERROR("<operator>", 2, "int|float|Ceres.Operand");
     }
 
-    if (THIS->expr_trees->size() <= index)
+    if (THIS->expr_trees->size() <= (unsigned int)index)
       THIS->expr_trees->resize (index + 1);
 
     THIS->expr_trees->at (index) = new_node;
