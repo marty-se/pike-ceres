@@ -2,6 +2,7 @@
 VPATH=@srcdir@
 MODNAME=Ceres
 MODULE_WRAPPER_PREFIX=_
+MODULE_CFLAGS=-std=c++11
 MODULE_CPPFLAGS=-I/usr/include/eigen3
 MOD_LDSHARED=g++ -shared
 

@@ -1,3 +1,5 @@
+#include <ceres/ceres.h>
+
 extern "C" {
 #include "global.h"
 #include "module_support.h"
@@ -5,18 +7,678 @@ extern "C" {
 #include "interpret.h"
 #include "builtin_functions.h"
 #include "pike_threadlib.h"
-}
 
-#include <ceres/ceres.h>
-
-extern "C" {
 DECLARATIONS
 }
 
 typedef int int32;
 typedef unsigned int uint32;
 
-class PikeCostFunction: public ceres::CostFunction 
+template <typename T>
+class TreeNode
+{
+public:
+  enum NodeType {
+    FUNCTION_NODE,
+    OPERATOR_NODE,
+    PARAMETER_NODE,
+    SCALAR_NODE
+  };
+
+  enum FunctionType {
+    OP_ABS,
+    OP_LOG,
+    OP_EXP,
+    OP_SQRT,
+    OP_COS,
+    OP_ACOS,
+    OP_SIN,
+    OP_ASIN,
+    OP_TAN,
+    OP_ATAN,
+    OP_SINH,
+    OP_COSH,
+    OP_TANH,
+    OP_POW,
+    OP_ATAN2
+  };
+
+  enum OperatorType {
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+#if 0
+    OP_LT,
+    OP_GT,
+    OP_EQ
+#endif
+  };
+
+  TreeNode (FunctionType func_type, TreeNode *child)
+    : func_type_(func_type), left_child_(child)
+  {
+    node_type_ = FUNCTION_NODE;
+    left_child_->AddRef();
+  }
+
+  TreeNode (FunctionType func_type, TreeNode *left_child,
+	    TreeNode *right_child)
+    : func_type_(func_type), left_child_(left_child), right_child_(right_child)
+  {
+    node_type_ = FUNCTION_NODE;
+    left_child_->AddRef();
+    right_child_->AddRef();
+  }
+
+  TreeNode (OperatorType op_type, TreeNode *left_child, TreeNode *right_child)
+    : op_type_(op_type), left_child_(left_child), right_child_(right_child)
+  {
+    node_type_ = OPERATOR_NODE;
+    left_child_->AddRef();
+    right_child_->AddRef();
+  }
+
+  TreeNode (int32 param_block, int32 param_block_index)
+    : param_block_(param_block), param_block_index_(param_block_index)
+  {
+    node_type_ = PARAMETER_NODE;
+  }
+
+  explicit TreeNode (T value)
+    : value_(value)
+  {
+    node_type_ = SCALAR_NODE;
+  }
+
+  ~TreeNode()
+  {
+    if (left_child_ != NULL)
+      left_child_->SubRef();
+    if (right_child_ != NULL)
+      right_child_->SubRef();
+  }
+
+  template <typename TEval>
+  TEval Evaluate (TEval const* const* param_blocks,
+		  const std::vector<int32>& block_sizes)
+  {
+    switch (node_type_) {
+    case FUNCTION_NODE:
+      return EvalFunction (param_blocks, block_sizes);
+    case OPERATOR_NODE:
+      return EvalOperator (param_blocks, block_sizes);
+    case PARAMETER_NODE:
+      return EvalParameter (param_blocks, block_sizes);
+    case SCALAR_NODE:
+      return TEval (value_);
+    }
+
+    throw;
+  }
+
+  void AddRef()
+  {
+    refs_++;
+  }
+
+  void SubRef()
+  {
+    if (!--refs_)
+      delete this;
+  }
+
+protected:
+
+  template <typename TEval>
+  TEval EvalFunction (TEval const* const* param_blocks,
+		      const std::vector<int32>& block_sizes)
+  {
+    TEval left_val = left_child_->Evaluate (param_blocks, block_sizes);
+
+    TEval right_val;
+    if (right_child_)
+      right_val = right_child_->Evaluate (param_blocks, block_sizes);
+
+    switch (func_type_) {
+    case OP_ABS:
+      return ceres::abs (left_val);
+    case OP_LOG:
+      return ceres::log (left_val);
+    case OP_EXP:
+      return ceres::exp (left_val);
+    case OP_SQRT:
+      return ceres::sqrt (left_val);
+    case OP_COS:
+      return ceres::cos (left_val);
+    case OP_ACOS:
+      return ceres::acos (left_val);
+    case OP_SIN:
+      return ceres::sin (left_val);
+    case OP_ASIN:
+      return ceres::asin (left_val);
+    case OP_TAN:
+      return ceres::tan (left_val);
+    case OP_ATAN:
+      return ceres::atan (left_val);
+    case OP_SINH:
+      return ceres::sinh (left_val);
+    case OP_COSH:
+      return ceres::cosh (left_val);
+    case OP_TANH:
+      return ceres::tanh (left_val);
+    case OP_POW:
+      return ceres::pow (left_val, right_val);
+    case OP_ATAN2:
+      return ceres::atan2 (left_val, right_val);
+    }
+
+    throw;
+  }
+
+  template <typename TEval>
+  TEval EvalOperator (TEval const* const* param_blocks,
+		      const std::vector<int32>& block_sizes)
+  {
+    TEval left_val = left_child_->Evaluate (param_blocks, block_sizes);
+    TEval right_val = right_child_->Evaluate (param_blocks, block_sizes);
+
+    switch (op_type_) {
+    case OP_ADD:
+      return left_val + right_val;
+    case OP_SUB:
+      return left_val - right_val;
+    case OP_MUL:
+      return left_val * right_val;
+    case OP_DIV:
+      return left_val / right_val;
+#if 0
+    case OP_LT:
+      return left_val < right_val;
+    case OP_GT:
+      return left_val > right_val;
+    case OP_EQ:
+      return left_val == right_val;
+#endif
+    }
+
+    throw;
+  }
+
+  template <typename TEval>
+  TEval EvalParameter (TEval const* const* param_blocks,
+		       const std::vector<int32>& block_sizes)
+  {
+#ifdef DEBUG
+    if (param_block_index_ < 0 ||
+	param_block_index_ > block_sizes.at (param_block_))
+      throw;
+#endif
+
+    return param_blocks[param_block_][param_block_index_];
+  }
+
+  int refs_ = 0;
+
+  NodeType node_type_;
+  FunctionType func_type_;
+  OperatorType op_type_;
+
+  TreeNode *left_child_ = NULL;
+  TreeNode *right_child_ = NULL;
+
+  int param_block_;
+  int param_block_index_;
+
+  T value_;
+};
+
+typedef TreeNode<double> DoubleTreeNode;
+
+static const int kStride = 10;
+
+struct PikeCostFunctor {
+public:
+  typedef ceres::DynamicAutoDiffCostFunction<PikeCostFunctor, kStride> PikeDynamicCostFunction;
+
+  PikeCostFunctor (const std::vector<int32> block_sizes,
+		   const std::vector<DoubleTreeNode*> expr_trees) :
+    block_sizes_(block_sizes),
+    expr_trees_(expr_trees)
+  {  }
+
+  template <typename T>
+  bool operator()(T const* const* param_blocks, T* residuals) const
+  {
+    for (int i = 0; i < expr_trees_.size(); i++) {
+      DoubleTreeNode* tree = expr_trees_.at (i);
+
+      residuals[i] = tree->Evaluate (param_blocks, block_sizes_);
+    }
+    return true;
+  }
+
+  static PikeDynamicCostFunction*
+  Create (const std::vector<int32>& block_sizes,
+	  const std::vector<DoubleTreeNode*>& expr_trees)
+  {
+    PikeCostFunctor *functor =
+      new PikeCostFunctor (block_sizes, expr_trees);
+    PikeDynamicCostFunction *cost_function =
+      new PikeDynamicCostFunction (functor);
+
+    for (auto const &it : block_sizes) {
+      cost_function->AddParameterBlock (it);
+    }
+    cost_function->SetNumResiduals (expr_trees.size());
+    return cost_function;
+  }
+
+private:
+  const std::vector<int32> block_sizes_;
+  const std::vector<DoubleTreeNode*> expr_trees_;
+};
+
+PIKECLASS Operand {
+  CVAR DoubleTreeNode *expr_node;
+  CVAR int param_block;
+  CVAR int param_block_index;
+
+  DoubleTreeNode* build_tree_from_svalues
+    (DoubleTreeNode::OperatorType op_type,
+     const std::vector<struct svalue *> &svals)
+  {
+    DoubleTreeNode* root = NULL;
+    for (auto *it : svals) {
+      struct svalue* op_sval = it;
+      DoubleTreeNode *new_node = NULL;
+      if (TYPEOF (*op_sval) == T_OBJECT &&
+	  op_sval->u.object->prog == Ceres_Operand_program) {
+	struct object *op = op_sval->u.object;
+	struct Ceres_Operand_struct *op_struct =
+	  (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+	new_node = op_struct->expr_node;
+	if (new_node == NULL) {
+	  new_node = new DoubleTreeNode (op_struct->param_block,
+					 op_struct->param_block_index);
+	}
+      } else if (TYPEOF (*op_sval) == T_FLOAT) {
+	new_node = new DoubleTreeNode (op_sval->u.float_number);
+      } else if (TYPEOF (*op_sval) == T_INT) {
+	new_node = new DoubleTreeNode (op_sval->u.integer);
+      } else {
+	throw;
+      }
+
+      if (root != NULL) {
+	root = new DoubleTreeNode (op_type, root, new_node);
+      } else {
+	root = new_node;
+      }
+    }
+
+    return root;
+  }
+
+  enum OpSide { OP_LEFT, OP_RIGHT };
+
+  void handle_op (INT32 args,
+		  DoubleTreeNode::OperatorType op_type,
+		  OpSide op_side)
+  {
+    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct *new_op_struct =
+      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+
+    struct svalue my_svalue;
+    SET_SVAL (my_svalue, T_OBJECT, 0, object, Pike_fp->current_object);
+
+    std::vector<struct svalue *> svalues;
+
+    if (op_side == OP_LEFT)
+      svalues.push_back (&my_svalue);
+
+    for (int i = 0; i < args; i++) {
+      struct svalue op = Pike_sp[i-args];
+      if (!((TYPEOF (op) == T_OBJECT &&
+	     op.u.object->prog == Ceres_Operand_program) ||
+	    TYPEOF (op) == T_INT ||
+	    TYPEOF (op) == T_FLOAT)) {
+	SIMPLE_BAD_ARG_ERROR("<operator>",i+1,"int|float|Ceres.Operand");
+      }
+
+      svalues.push_back (Pike_sp+i-args);
+    }
+
+    if (op_side == OP_RIGHT)
+      svalues.push_back (&my_svalue);
+
+    new_op_struct->expr_node = build_tree_from_svalues (op_type, svalues);
+    new_op_struct->expr_node->AddRef();
+
+    pop_n_elems (args);
+    push_object (new_operand);
+  }
+
+  PIKEFUN object `+(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_ADD, OP_LEFT); }
+  PIKEFUN object ``+(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_ADD, OP_RIGHT); }
+
+  PIKEFUN object `-(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_SUB, OP_LEFT); }
+  PIKEFUN object ``-(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_SUB, OP_RIGHT); }
+
+  PIKEFUN object `*(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_MUL, OP_LEFT); }
+  PIKEFUN object ``*(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_MUL, OP_RIGHT); }
+
+  PIKEFUN object `/(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_DIV, OP_LEFT); }
+  PIKEFUN object ``/(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_DIV, OP_RIGHT); }
+
+#if 0
+  PIKEFUN object `<(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_LT, OP_LEFT); }
+  PIKEFUN object ``<(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_LT, OP_RIGHT); }
+
+  PIKEFUN object `>(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_GT, OP_LEFT); }
+  PIKEFUN object ``>(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_GT, OP_RIGHT); }
+
+  PIKEFUN object `==(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_EQ, OP_LEFT); }
+  PIKEFUN object ``==(mixed ... ops)
+  { handle_op (args, DoubleTreeNode::OP_EQ, OP_RIGHT); }
+#endif
+
+  INIT
+  {
+    THIS->expr_node = NULL;
+  }
+
+  EXIT
+  {
+    if (THIS->expr_node != NULL)
+      THIS->expr_node->SubRef();
+  }
+}
+
+PIKECLASS ParameterBlock {
+  CVAR int param_block_idx;
+  CVAR int size;
+
+  PIKEFUN void create (int param_block_idx, int size)
+  {
+    THIS->param_block_idx = param_block_idx;
+    THIS->size = size;
+  }
+
+  PIKEFUN object `[](int index)
+  {
+    if (index < 0 || index >= THIS->size)
+      Pike_error ("Index out of range.\n");
+
+    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct *new_op_struct =
+      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+
+    new_op_struct->expr_node =
+      new DoubleTreeNode (THIS->param_block_idx, index);
+
+    new_op_struct->expr_node->AddRef();
+
+    RETURN new_operand;
+  }
+
+  PIKEFUN int _sizeof()
+  {
+    push_int (THIS->size);
+  }
+}
+
+PIKECLASS ResidualBlock {
+  CVAR std::vector<DoubleTreeNode*>* expr_trees;
+  CVAR int size;
+
+  PIKEFUN void create (int size)
+  {
+    THIS->size = size;
+  }
+
+  PIKEFUN object `[]=(int index, int|float|object value)
+  {
+    if (index < 0 || index > THIS->size)
+      Pike_error ("Index out of range.\n");
+
+    DoubleTreeNode* new_node;
+    if (TYPEOF (*value) == T_OBJECT &&
+	value->u.object->prog == Ceres_Operand_program) {
+      struct object *op = value->u.object;
+      struct Ceres_Operand_struct *op_struct =
+      (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+      new_node = op_struct->expr_node;
+      if (new_node == NULL) {
+	throw;
+      }
+    } else if (TYPEOF (*value) == T_FLOAT) {
+      new_node = new DoubleTreeNode (value->u.float_number);
+    } else if (TYPEOF (*value) == T_INT) {
+      new_node = new DoubleTreeNode (value->u.integer);
+    } else {
+      SIMPLE_BAD_ARG_ERROR("<operator>", 2, "int|float|Ceres.Operand");
+    }
+
+    if (THIS->expr_trees->size() <= index)
+      THIS->expr_trees->resize (index + 1);
+
+    THIS->expr_trees->at (index) = new_node;
+    new_node->AddRef();
+  }
+
+  INIT
+  {
+    THIS->expr_trees = new std::vector<DoubleTreeNode*>;
+  }
+
+  EXIT
+  {
+    std::vector<DoubleTreeNode*>* expr_trees = THIS->expr_trees;
+    for (auto const &it : *expr_trees) {
+      DoubleTreeNode* node = it;
+      node->SubRef();
+    }
+    delete expr_trees;
+  }
+}
+
+PIKECLASS CostFunction {
+  PIKEFUN object evaluate()
+  {
+
+  }
+
+  void handle_func (INT32 args, DoubleTreeNode::FunctionType func_type)
+  {
+    struct object *new_operand = fast_clone_object (Ceres_Operand_program);
+    struct Ceres_Operand_struct *new_op_struct =
+      (Ceres_Operand_struct *)get_storage (new_operand, Ceres_Operand_program);
+
+    if (args > 2) Pike_error ("Too many arguments.\n");
+
+    DoubleTreeNode *left_node = NULL;
+    DoubleTreeNode *right_node = NULL;
+
+    for (int i = 0; i < args; i++) {
+      struct svalue op_sval = Pike_sp[i-args];
+
+      DoubleTreeNode *new_node = NULL;
+      if (TYPEOF (op_sval) == T_OBJECT &&
+	  op_sval.u.object->prog == Ceres_Operand_program) {
+	struct object *op = op_sval.u.object;
+	struct Ceres_Operand_struct *op_struct =
+	  (Ceres_Operand_struct *)get_storage (op, Ceres_Operand_program);
+	new_node = op_struct->expr_node;
+	if (new_node == NULL) {
+	  new_node = new DoubleTreeNode (op_struct->param_block,
+					 op_struct->param_block_index);
+	}
+      } else if (TYPEOF (op_sval) == T_FLOAT) {
+	new_node = new DoubleTreeNode (op_sval.u.float_number);
+      } else if (TYPEOF (op_sval) == T_INT) {
+	new_node = new DoubleTreeNode (op_sval.u.integer);
+      } else {
+	SIMPLE_BAD_ARG_ERROR("<operator>", i, "int|float|Ceres.Operand");
+      }
+
+      if (i == 0)
+	left_node = new_node;
+      else if (i == 1)
+	right_node = new_node;
+    }
+
+    if (right_node != NULL)
+      new_op_struct->expr_node = new DoubleTreeNode (func_type, left_node,
+						     right_node);
+    else
+      new_op_struct->expr_node = new DoubleTreeNode (func_type, left_node);
+
+    new_op_struct->expr_node->AddRef();
+    pop_n_elems (args);
+    push_object (new_operand);
+  }
+
+  PIKEFUN object abs   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_ABS); }
+
+  PIKEFUN object log   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_LOG); }
+
+  PIKEFUN object exp   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_EXP); }
+
+  PIKEFUN object sqrt  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_SQRT); }
+
+  PIKEFUN object cos   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_COS); }
+
+  PIKEFUN object acos  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_ACOS); }
+
+  PIKEFUN object sin   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_SIN); }
+
+  PIKEFUN object asin  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_ASIN); }
+
+  PIKEFUN object tan   (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_TAN); }
+
+  PIKEFUN object atan  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_ATAN); }
+
+  PIKEFUN object sinh  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_SINH); }
+
+  PIKEFUN object cosh  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_COSH); }
+
+  PIKEFUN object tanh  (int|float|object op1)
+  { handle_func (args, DoubleTreeNode::OP_TANH); }
+
+  PIKEFUN object pow   (int|float|object op1, int|float|object op2)
+  { handle_func (args, DoubleTreeNode::OP_POW); }
+
+  PIKEFUN object atan2 (int|float|object op1, int|float|object op2)
+  { handle_func (args, DoubleTreeNode::OP_ATAN2); }
+
+}
+
+PIKECLASS AutoDiffSolver {
+  PIKEFUN void solve (object cost_function, array(int) block_sizes)
+  {
+#if 0
+    if (cost_function->prog != Ceres_CostFunction_program)
+      SIMPLE_BAD_ARG_ERROR("solve", 1, "Ceres.CostFunction");
+#endif
+
+    if (block_sizes->type_field != BIT_INT)
+      SIMPLE_BAD_ARG_ERROR("solve", 2, "array(int)");
+
+    std::vector<int32> block_sizes_vect;
+
+    struct svalue tmp_sval;
+    mark_free_svalue (&tmp_sval);
+    int num_blocks = block_sizes->size;
+    for (int i = 0; i < num_blocks; i++) {
+      array_index(&tmp_sval, block_sizes, i);
+      if (TYPEOF (tmp_sval) != T_INT)
+	throw;
+
+      push_int (i); // Index of parameter block
+      int block_size = tmp_sval.u.integer;
+      push_int (block_size); // Size of parameter block
+
+      push_object (clone_object (Ceres_ParameterBlock_program, 2));
+      block_sizes_vect.push_back (block_size);
+    }
+    f_aggregate (num_blocks);
+    free_svalue (&tmp_sval);
+
+    apply (cost_function, "evaluate", 1);
+    struct svalue res_sval = Pike_sp[-1];
+
+    if (TYPEOF (res_sval) == T_OBJECT &&
+	res_sval.u.object->prog == Ceres_ResidualBlock_program) {
+      struct object *res_obj = res_sval.u.object;
+      struct Ceres_ResidualBlock_struct *res_struct =
+      (Ceres_ResidualBlock_struct *)get_storage (res_obj,
+						 Ceres_ResidualBlock_program);
+      std::vector<DoubleTreeNode*> expr_trees = *res_struct->expr_trees;
+
+      PikeCostFunctor::PikeDynamicCostFunction* cf =
+	PikeCostFunctor::Create (block_sizes_vect, expr_trees);
+
+      int num_blocks = block_sizes_vect.size();
+      std::vector<double*> param_blocks;
+      for (int i = 0; i < num_blocks; i++) {
+	double* new_elems =
+	  (double*)malloc (sizeof (double) * block_sizes_vect[i]);
+
+	for (int j = 0; j < block_sizes_vect[i]; j++)
+	  new_elems[j] = 0.0;
+
+	param_blocks.push_back (new_elems);
+      }
+
+      ceres::Problem problem;
+      problem.AddResidualBlock (cf, NULL, param_blocks);
+
+      ceres::Solver::Options options;
+      options.linear_solver_type = ceres::DENSE_QR;
+      options.minimizer_progress_to_stdout = true;
+      ceres::Solver::Summary summary;
+      ceres::Solve(options, &problem, &summary);
+
+      for (int i = 0; i < param_blocks.size(); i++)
+	free (param_blocks[i]);
+
+      std::cout << summary.BriefReport() << "\n";
+    } else {
+      Pike_error ("Evaluate callback must return a ResidualBlock\n.");
+    }
+
+    pop_n_elems (args + 1); // args + return value from evaluate.
+  }
+}
+
+class PikeCostFunction: public ceres::CostFunction
 {
  public:
   explicit PikeCostFunction(struct svalue *pike_cb,
@@ -55,7 +717,7 @@ class PikeCostFunction: public ceres::CostFunction
 
     struct array *jac_arr = NULL;
 
-    if (jacobians != NULL) {     
+    if (jacobians != NULL) {
       for (unsigned int i = 0; i < block_sizes.size(); i++) {
 	if (jacobians[i] == NULL) {
 	  push_int (0);
@@ -63,7 +725,7 @@ class PikeCostFunction: public ceres::CostFunction
 	}
 
 	int block_size = block_sizes[i];
-	
+
 	for (int j = 0; j < num_residuals(); ++j) {
 	  for (int k = 0; k < block_size; ++k)
 	    push_float (0.0);
@@ -92,7 +754,7 @@ class PikeCostFunction: public ceres::CostFunction
       residuals[i] = res_sval.u.float_number;
     }
     free_svalue (&res_sval);
-    
+
     free_array (res_arr);
 
     if (jac_arr != NULL) {
@@ -130,7 +792,7 @@ class PikeCostFunction: public ceres::CostFunction
 
     return true;
   }
- 
+
  protected:
   struct svalue pike_cb_;
 };
@@ -140,8 +802,8 @@ PIKECLASS Problem {
   PIKEVAR array parameters;
   PIKEVAR int num_residuals;
 
-  PIKEFUN void create (function(array,array,array:void) evaluate_cb, 
-		       array(array(float)) parameters, 
+  PIKEFUN void create (function(array,array,array:void) evaluate_cb,
+		       array(array(float)) parameters,
 		       int num_residuals)
   {
     assign_svalue (&THIS->evaluate_cb, evaluate_cb);
@@ -176,7 +838,7 @@ PIKECLASS Problem {
 
       int a1_elems = a1.u.array->size;
 
-      double *params = 
+      double *params =
 	reinterpret_cast<double *>(malloc (sizeof (double) * a1_elems));
 
       for (int j = 0; j < a1_elems; j++) {
@@ -194,8 +856,8 @@ PIKECLASS Problem {
     free_array (param_arr);
 
     // Set up the only cost function (also known as residual).
-    PikeCostFunction* cost_function = 
-      new PikeCostFunction (&THIS->evaluate_cb, block_sizes, 
+    PikeCostFunction* cost_function =
+      new PikeCostFunction (&THIS->evaluate_cb, block_sizes,
 			    THIS->num_residuals);
     problem.AddResidualBlock(cost_function, NULL, param_blocks);
 
@@ -232,9 +894,16 @@ PIKECLASS Problem {
 }
 
 extern "C" {
+
+static int google_logging_inited = 0;
+
 PIKE_MODULE_INIT
 {
   INIT;
+  if (!google_logging_inited) {
+    google_logging_inited = 1;
+    google::InitGoogleLogging("PikeCeres");
+  }
 }
 
 PIKE_MODULE_EXIT
