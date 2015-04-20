@@ -610,7 +610,8 @@ static int is_ceres_cost_function (struct object* o)
 }
 
 PIKECLASS AutoDiffSolver {
-  PIKEFUN void solve (object cost_function, array(int) block_sizes)
+  PIKEFUN array(array(float)) solve (object cost_function,
+				     array(int) block_sizes)
   {
     if (!is_ceres_cost_function (cost_function))
       SIMPLE_BAD_ARG_ERROR("solve", 1, "Ceres.CostFunction");
@@ -672,14 +673,20 @@ PIKECLASS AutoDiffSolver {
 
       ceres::Solver::Options options;
       options.linear_solver_type = ceres::DENSE_QR;
-      options.minimizer_progress_to_stdout = true;
+      options.minimizer_progress_to_stdout = false;
       ceres::Solver::Summary summary;
       ceres::Solve(options, &problem, &summary);
 
-      for (int i = 0; i < param_blocks.size(); i++)
-	free (param_blocks[i]);
+      for (unsigned int i = 0; i < block_sizes_vect.size(); i++) {
+	int block_size = block_sizes_vect[i];
+	for (int j = 0; j < block_size; j++)
+	  push_float (param_blocks[i][j]);
+	f_aggregate (block_size);
+      }
+      f_aggregate (param_blocks.size());
 
-      std::cout << summary.BriefReport() << "\n";
+      for (unsigned int i = 0; i < param_blocks.size(); i++)
+	free (param_blocks[i]);
     } else {
       Pike_error ("Evaluate callback must return a ResidualBlock\n.");
     }
