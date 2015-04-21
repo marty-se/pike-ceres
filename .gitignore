@@ -1,0 +1,14 @@
+Makefile
+autom4te.cache/
+ceres.cc
+ceres.o
+config.cache
+config.log
+config.status
+configure
+dependencies
+linker_options
+make_variables
+modlist_segment
+module.so
+propagated_variables
