@@ -2,26 +2,17 @@
 VPATH=@srcdir@
 MODNAME=Ceres
 MODULE_WRAPPER_PREFIX=_
-MODULE_CFLAGS=-std=c++11
-MODULE_CPPFLAGS=-I/usr/include/eigen3
+
+# Pike's svalue.h has a couple of defines that lack whitespace between
+# literal and identifier, which isn't compatible with C++11. Disable
+# that warning.
+MODULE_CFLAGS=-std=c++11 -Wno-literal-suffix
+
 MOD_LDSHARED=g++ -shared
 
 OBJS=ceres.o
 
-CERES_LIBRARY := -lceres
-CERES_LIBRARY_PATH := -L/usr/local/lib
-CERES_LIBRARY_DEPENDENCIES = -lgflags -lglog
-
-# If Ceres was built with Suitesparse:
-CERES_LIBRARY_DEPENDENCIES += -llapack -lcamd -lamd -lccolamd -lcolamd -lcholmod
-
-# If Ceres was built with CXSparse:
-CERES_LIBRARY_DEPENDENCIES += -lcxsparse
-
-# If Ceres was built with OpenMP:
-CERES_LIBRARY_DEPENDENCIES += -fopenmp -lpthread -lgomp -lm
-
-MODULE_LDFLAGS=@LDFLAGS@ @LIBS@ $(CERES_LIBRARY_DEPENDENCIES) $(CERES_LIBRARY)
+MODULE_LDFLAGS=@LDFLAGS@ @LIBS@
 
 CONFIG_HEADERS=@CONFIG_HEADERS@
 

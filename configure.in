@@ -1,3 +1,24 @@
-AC_INIT()
+AC_INIT(ceres.ccmod)
 AC_MODULE_INIT()
-AC_OUTPUT(Makefile)
+AC_LANG(C++)
+
+# Add includes from pkg-config if available.
+MY_AC_PATH_PROG(PKG_CONFIG, ${ac_tool_prefix}pkg-config, no)
+if ${ac_tool_prefix}pkg-config eigen3 2>/dev/null ; then
+  EIGEN_CFLAGS="`${ac_tool_prefix}pkg-config eigen3 --cflags`"
+  CPPFLAGS="$EIGEN_CFLAGS $CPPFLAGS"
+fi
+
+AC_CHECK_HEADER(Eigen/Core, [], AC_MSG_ERROR(Eigen not found.))
+
+AC_LANG_CPLUSPLUS
+AC_TRY_LINK([
+#include <ceres/ceres.h>
+],
+[
+  ceres::Solver::Options options;
+],
+[ceres_ok=yes],
+[AC_MSG_ERROR(libceres not found.)])
+
+AC_OUTPUT(Makefile,echo FOO >stamp-h)
