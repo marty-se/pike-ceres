@@ -12,3 +12,4 @@ make_variables
 modlist_segment
 module.so
 propagated_variables
+stamp-h
