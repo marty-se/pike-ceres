@@ -1,7 +1,7 @@
 @make_variables@
 VPATH=@srcdir@
 MODNAME=Ceres
-MODULE_WRAPPER_PREFIX=_
+#MODULE_WRAPPER_PREFIX=_
 
 # Pike's svalue.h has a couple of defines that lack whitespace between
 # literal and identifier, which isn't compatible with C++11. Disable
