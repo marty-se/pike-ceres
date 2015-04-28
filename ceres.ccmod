@@ -611,33 +611,36 @@ static int is_ceres_cost_function (struct object* o)
 
 PIKECLASS AutoDiffSolver {
   PIKEFUN array(array(float)) solve (object cost_function,
-				     array(int) block_sizes)
+				     array(array(float)) initial_params)
   {
     if (!is_ceres_cost_function (cost_function))
       SIMPLE_BAD_ARG_ERROR("solve", 1, "Ceres.CostFunction");
 
-    if (block_sizes->type_field != BIT_INT)
-      SIMPLE_BAD_ARG_ERROR("solve", 2, "array(int)");
+    if (initial_params->type_field != BIT_ARRAY)
+      SIMPLE_BAD_ARG_ERROR("solve", 2, "array(array(float))");
 
     std::vector<int32> block_sizes_vect;
 
-    struct svalue tmp_sval;
-    mark_free_svalue (&tmp_sval);
-    int num_blocks = block_sizes->size;
-    for (int i = 0; i < num_blocks; i++) {
-      array_index(&tmp_sval, block_sizes, i);
-      if (TYPEOF (tmp_sval) != T_INT)
-	throw;
+    {
+      struct svalue tmp_sval;
+      mark_free_svalue (&tmp_sval);
+      int num_blocks = initial_params->size;
+      for (int i = 0; i < num_blocks; i++) {
+	array_index(&tmp_sval, initial_params, i);
+	if (TYPEOF (tmp_sval) != T_ARRAY ||
+	    tmp_sval.u.array->type_field != BIT_FLOAT)
+	  SIMPLE_BAD_ARG_ERROR("solve", 2, "array(array(float))");
 
-      push_int (i); // Index of parameter block
-      int block_size = tmp_sval.u.integer;
-      push_int (block_size); // Size of parameter block
+	push_int (i); // Index of parameter block
+	int block_size = tmp_sval.u.array->size;
+	push_int (block_size); // Size of parameter block
 
-      push_object (clone_object (Ceres_ParameterBlock_program, 2));
-      block_sizes_vect.push_back (block_size);
+	push_object (clone_object (Ceres_ParameterBlock_program, 2));
+	block_sizes_vect.push_back (block_size);
+      }
+      f_aggregate (num_blocks);
+      free_svalue (&tmp_sval);
     }
-    f_aggregate (num_blocks);
-    free_svalue (&tmp_sval);
 
     apply (cost_function, "evaluate", 1);
 
@@ -658,15 +661,34 @@ PIKECLASS AutoDiffSolver {
 
       int num_blocks = block_sizes_vect.size();
       std::vector<double*> param_blocks;
-      for (int i = 0; i < num_blocks; i++) {
-	double* new_elems =
-	  (double*)malloc (sizeof (double) * block_sizes_vect[i]);
+      struct svalue tmp_sval;
+      mark_free_svalue (&tmp_sval);
+      for (int i = 0; i < initial_params->size; i++) {
+	array_index(&tmp_sval, initial_params, i);
+	if (TYPEOF (tmp_sval) != T_ARRAY ||
+	    tmp_sval.u.array->type_field != BIT_FLOAT)
+	  Pike_error ("initial_params must be array(array(float))\n");
 
-	for (int j = 0; j < block_sizes_vect[i]; j++)
-	  new_elems[j] = 0.0;
+	struct array* inner_array = tmp_sval.u.array;
+	size_t inner_size = inner_array->size;
+	double* new_elems =
+	  (double*)malloc (sizeof (double) * inner_size);
+
+	struct svalue float_sval;
+	mark_free_svalue (&float_sval);
+	for (unsigned int j = 0; j < inner_size; j++) {
+	  array_index(&float_sval, inner_array, j);
+	  if (TYPEOF (float_sval) != T_FLOAT)
+	    throw; // This case should be taken care of by the
+		   // type_field check above, so this is just
+		   // odd-case-bug paranoia.
+	  new_elems[j] = float_sval.u.float_number;
+	}
+	free_svalue (&float_sval);
 
 	param_blocks.push_back (new_elems);
       }
+      free_svalue (&tmp_sval);
 
       ceres::Problem problem;
       problem.AddResidualBlock (cf, NULL, param_blocks);

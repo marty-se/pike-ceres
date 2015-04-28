@@ -17,7 +17,7 @@ int main(int argc, array argv)
 {
   MyCostFunction mcf = MyCostFunction();
   Ceres.AutoDiffSolver solver = Ceres.AutoDiffSolver();
-  array(int) block_sizes = ({ 2 });
+  array(array(float)) block_sizes = ({ ({ 0.0, 0.0 }) });
   array(array(float)) result = solver->solve (mcf, block_sizes);
   werror ("result: %O\n", result);
 }
