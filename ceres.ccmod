@@ -597,7 +597,7 @@ PIKECLASS Operand {
   CVAR int param_block_index;
 
   DoubleTreeNode* build_tree_from_svalues
-    (DoubleTreeNode::OperatorType op_type,
+    (OperatorType op_type,
      const std::vector<struct svalue*> &svals)
   {
     DoubleTreeNode* root = NULL;
