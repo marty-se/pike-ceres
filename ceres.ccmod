@@ -1,4 +1,7 @@
 #include <ceres/ceres.h>
+#include <vector>
+#include <stack>
+#include <sstream>
 
 extern "C" {
 #include "global.h"
@@ -14,47 +17,60 @@ DECLARATIONS
 typedef int int32;
 typedef unsigned int uint32;
 
+enum NodeType {
+  FUNCTION_NODE,
+  OPERATOR_NODE,
+  PARAMETER_NODE,
+  SCALAR_NODE
+};
+
+enum FunctionType {
+  OP_ABS,
+  OP_LOG,
+  OP_EXP,
+  OP_SQRT,
+  OP_COS,
+  OP_ACOS,
+  OP_SIN,
+  OP_ASIN,
+  OP_TAN,
+  OP_ATAN,
+  OP_SINH,
+  OP_COSH,
+  OP_TANH,
+  OP_POW,
+  OP_ATAN2
+};
+
+enum OperatorType {
+  OP_ADD,
+  OP_SUB,
+  OP_MUL,
+  OP_DIV,
+#if 0
+  OP_LT,
+  OP_GT,
+  OP_EQ
+#endif
+};
+
+template <typename T>
+struct ExprOp
+{
+  NodeType node_type;
+  FunctionType func_type;
+  OperatorType op_type;
+
+  unsigned int param_block;
+  unsigned int param_block_index;
+
+  T value;
+};
+
 template <typename T>
 class TreeNode
 {
 public:
-  enum NodeType {
-    FUNCTION_NODE,
-    OPERATOR_NODE,
-    PARAMETER_NODE,
-    SCALAR_NODE
-  };
-
-  enum FunctionType {
-    OP_ABS,
-    OP_LOG,
-    OP_EXP,
-    OP_SQRT,
-    OP_COS,
-    OP_ACOS,
-    OP_SIN,
-    OP_ASIN,
-    OP_TAN,
-    OP_ATAN,
-    OP_SINH,
-    OP_COSH,
-    OP_TANH,
-    OP_POW,
-    OP_ATAN2
-  };
-
-  enum OperatorType {
-    OP_ADD,
-    OP_SUB,
-    OP_MUL,
-    OP_DIV,
-#if 0
-    OP_LT,
-    OP_GT,
-    OP_EQ
-#endif
-  };
-
   explicit TreeNode (T value) : value_(value)
   {
     node_type_ = SCALAR_NODE;
@@ -97,10 +113,196 @@ public:
       right_child_->SubRef();
   }
 
+  std::string StringExpr()
+  {
+    std::ostringstream res;
+    AddExprToStream (res);
+    return res.str();
+  }
+
+  void AddExprToStream (std::ostringstream& res)
+  {
+    if (node_type_ == FUNCTION_NODE) {
+      switch (func_type_) {
+      case OP_ABS:
+	res << "abs";
+	break;
+      case OP_LOG:
+	res << "log";
+	break;
+      case OP_EXP:
+	res << "exp";
+	break;
+      case OP_SQRT:
+	res << "sqrt";
+	break;
+      case OP_COS:
+	res << "cos";
+	break;
+      case OP_ACOS:
+	res << "acos";
+	break;
+      case OP_SIN:
+	res << "sin";
+	break;
+      case OP_ASIN:
+	res << "asin";
+	break;
+      case OP_TAN:
+	res << "tan";
+	break;
+      case OP_ATAN:
+	res << "atan";
+	break;
+      case OP_SINH:
+	res << "sinh";
+	break;
+      case OP_COSH:
+	res << "cosh";
+	break;
+      case OP_TANH:
+	res << "tanh";
+	break;
+      case OP_POW:
+	res << "pow";
+	break;
+      case OP_ATAN2:
+	res << "atan2";
+	break;
+      }
+    }
+
+    if (node_type_ == FUNCTION_NODE || node_type_ == OPERATOR_NODE)
+      res << "(";
+
+    if (left_child_ != NULL)
+      left_child_->AddExprToStream (res);
+
+    if (node_type_ == OPERATOR_NODE) {
+      switch (op_type_) {
+      case OP_ADD:
+	res << " + ";
+	break;
+      case OP_SUB:
+	res << " - ";
+	break;
+      case OP_MUL:
+	res << " * ";
+	break;
+      case OP_DIV:
+	res << " / ";
+	break;
+#if 0
+      case OP_LT:
+	res << " < ";
+	break;
+      case OP_GT:
+	res << " > ";
+	break;
+      case OP_EQ:
+	res << " == ";
+	break;
+#endif
+      }
+    }
+
+    if (node_type_ == PARAMETER_NODE)
+      res << "P(" << param_block_ << "," << param_block_index_ << ")";
+    else if (node_type_ == SCALAR_NODE)
+      res << value_;
+
+    if (right_child_ != NULL)
+      right_child_->AddExprToStream (res);
+
+    if (node_type_ == FUNCTION_NODE || node_type_ == OPERATOR_NODE)
+      res << ")";
+  }
+
+  void AddPostfixExpr (std::vector<ExprOp<T> >& postfix_expr,
+		       const std::vector<int32>& block_sizes)
+  {
+    if (left_child_ != NULL)
+      left_child_->AddPostfixExpr(postfix_expr, block_sizes);
+    if (right_child_ != NULL)
+      right_child_->AddPostfixExpr (postfix_expr, block_sizes);
+
+    ExprOp<T> op = {};
+
+    switch (node_type_) {
+    case FUNCTION_NODE:
+      op.node_type = FUNCTION_NODE;
+      op.func_type = func_type_;
+      postfix_expr.push_back (op);
+      break;
+    case OPERATOR_NODE:
+      op.node_type = OPERATOR_NODE;
+      op.op_type = op_type_;
+      postfix_expr.push_back (op);
+      break;
+    case PARAMETER_NODE:
+      op.node_type = PARAMETER_NODE;
+      op.param_block = param_block_;
+      op.param_block_index = param_block_index_;
+      if (param_block_ >= block_sizes.size())
+	throw std::out_of_range ("Param block out of range");
+
+      if (param_block_index_ >= block_sizes.at (param_block_))
+	throw std::out_of_range ("Param block sub-index out of range");
+
+      postfix_expr.push_back (op);
+      break;
+    case SCALAR_NODE:
+      op.node_type = SCALAR_NODE;
+      op.value = value_;
+      postfix_expr.push_back (op);
+      break;
+    }
+  }
+
   template <typename TEval>
   TEval Evaluate (TEval const* const* param_blocks,
 		  const std::vector<int32>& block_sizes)
   {
+    if (!got_postfix_expr_) {
+      //      std::cout << "RESIDUAL = " << StringExpr() << std::endl;
+      AddPostfixExpr (postfix_expr_, block_sizes);
+      got_postfix_expr_ = true;
+    }
+
+    std::stack<TEval> expr_stack;
+
+    for (auto const &it : postfix_expr_) {
+      switch (it.node_type) {
+      case FUNCTION_NODE:
+	ApplyFunction (it.func_type, expr_stack);
+	break;
+      case OPERATOR_NODE:
+	ApplyOperator (it.op_type, expr_stack);
+	break;
+      case PARAMETER_NODE: {
+	unsigned int pb = it.param_block;
+	unsigned int pbi = it.param_block_index;
+	expr_stack.push (param_blocks[pb][pbi]);
+	break;
+      }
+      case SCALAR_NODE:
+	expr_stack.push (TEval (it.value));
+	break;
+      default:
+	throw;
+      }
+    }
+
+    if (expr_stack.size() != 1) {
+      if (expr_stack.size() < 1)
+	throw std::underflow_error ("Expression stack underflow");
+      else
+	throw std::overflow_error ("Expression stack overflow");
+    }
+
+    return expr_stack.top();
+
+#if 0
     switch (node_type_) {
     case FUNCTION_NODE:
       return EvalFunction (param_blocks, block_sizes);
@@ -111,6 +313,7 @@ public:
     case SCALAR_NODE:
       return TEval (value_);
     }
+#endif
 
     throw;
   }
@@ -127,6 +330,116 @@ public:
   }
 
 protected:
+
+  template <typename TEval>
+  static void ApplyFunction (const FunctionType func_type,
+			     std::stack<TEval>& expr_stack)
+  {
+    TEval operand1 = expr_stack.top();
+    expr_stack.pop();
+
+    TEval operand2;
+    TEval res;
+
+    switch (func_type) {
+    case OP_ABS:
+      res = ceres::abs (operand1);
+      break;
+    case OP_LOG:
+      res = ceres::log (operand1);
+      break;
+    case OP_EXP:
+      res = ceres::exp (operand1);
+      break;
+    case OP_SQRT:
+      res = ceres::sqrt (operand1);
+      break;
+    case OP_COS:
+      res = ceres::cos (operand1);
+      break;
+    case OP_ACOS:
+      res = ceres::acos (operand1);
+      break;
+    case OP_SIN:
+      res = ceres::sin (operand1);
+      break;
+    case OP_ASIN:
+      res = ceres::asin (operand1);
+      break;
+    case OP_TAN:
+      res = ceres::tan (operand1);
+      break;
+    case OP_ATAN:
+      res = ceres::atan (operand1);
+      break;
+    case OP_SINH:
+      res = ceres::sinh (operand1);
+      break;
+    case OP_COSH:
+      res = ceres::cosh (operand1);
+      break;
+    case OP_TANH:
+      res = ceres::tanh (operand1);
+      break;
+    case OP_POW:
+      operand2 = expr_stack.top();
+      expr_stack.pop();
+      res = ceres::pow (operand2, operand1);
+      break;
+    case OP_ATAN2:
+      operand2 = expr_stack.top();
+      expr_stack.pop();
+      res = ceres::atan2 (operand2, operand1);
+      break;
+    default:
+      throw std::invalid_argument ("Invalid function type in operand");
+    }
+
+    expr_stack.push (res);
+  }
+
+  template <typename TEval>
+  static void ApplyOperator (const OperatorType op_type,
+			     std::stack<TEval>& expr_stack)
+  {
+    TEval right_val = expr_stack.top();
+    expr_stack.pop();
+    TEval left_val = expr_stack.top();
+    expr_stack.pop();
+
+    TEval res;
+
+    switch (op_type) {
+    case OP_ADD:
+      res = left_val + right_val;
+      break;
+    case OP_SUB:
+      res = left_val - right_val;
+      break;
+    case OP_MUL:
+      res = left_val * right_val;
+      break;
+    case OP_DIV:
+      res = left_val / right_val;
+      break;
+#if 0
+    case OP_LT:
+      res = left_val < right_val;
+      break;
+    case OP_GT:
+      res = left_val > right_val;
+      break;
+    case OP_EQ:
+      res = left_val == right_val;
+      break;
+#endif
+    default:
+      throw std::invalid_argument ("Invalid operator type in operand");
+    }
+
+    expr_stack.push (res);
+  }
+
   template <typename TEval>
   TEval EvalFunction (TEval const* const* param_blocks,
 		      const std::vector<int32>& block_sizes)
@@ -214,6 +527,9 @@ protected:
   }
 
   int refs_ = 0;
+
+  bool got_postfix_expr_ = false;
+  std::vector<ExprOp<T> > postfix_expr_;
 
   NodeType node_type_;
   FunctionType func_type_;
@@ -319,7 +635,7 @@ PIKECLASS Operand {
   enum OpSide { OP_LEFT, OP_RIGHT };
 
   void handle_op (INT32 args,
-		  DoubleTreeNode::OperatorType op_type,
+		  OperatorType op_type,
 		  OpSide op_side)
   {
     struct object* new_operand = fast_clone_object (Ceres_Operand_program);
@@ -357,40 +673,40 @@ PIKECLASS Operand {
   }
 
   PIKEFUN object `+(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_ADD, OP_LEFT); }
+  { handle_op (args, OP_ADD, OP_LEFT); }
   PIKEFUN object ``+(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_ADD, OP_RIGHT); }
+  { handle_op (args, OP_ADD, OP_RIGHT); }
 
   PIKEFUN object `-(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_SUB, OP_LEFT); }
+  { handle_op (args, OP_SUB, OP_LEFT); }
   PIKEFUN object ``-(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_SUB, OP_RIGHT); }
+  { handle_op (args, OP_SUB, OP_RIGHT); }
 
   PIKEFUN object `*(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_MUL, OP_LEFT); }
+  { handle_op (args, OP_MUL, OP_LEFT); }
   PIKEFUN object ``*(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_MUL, OP_RIGHT); }
+  { handle_op (args, OP_MUL, OP_RIGHT); }
 
   PIKEFUN object `/(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_DIV, OP_LEFT); }
+  { handle_op (args, OP_DIV, OP_LEFT); }
   PIKEFUN object ``/(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_DIV, OP_RIGHT); }
+  { handle_op (args, OP_DIV, OP_RIGHT); }
 
 #if 0
   PIKEFUN object `<(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_LT, OP_LEFT); }
+  { handle_op (args, OP_LT, OP_LEFT); }
   PIKEFUN object ``<(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_LT, OP_RIGHT); }
+  { handle_op (args, OP_LT, OP_RIGHT); }
 
   PIKEFUN object `>(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_GT, OP_LEFT); }
+  { handle_op (args, OP_GT, OP_LEFT); }
   PIKEFUN object ``>(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_GT, OP_RIGHT); }
+  { handle_op (args, OP_GT, OP_RIGHT); }
 
   PIKEFUN object `==(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_EQ, OP_LEFT); }
+  { handle_op (args, OP_EQ, OP_LEFT); }
   PIKEFUN object ``==(mixed ... ops)
-  { handle_op (args, DoubleTreeNode::OP_EQ, OP_RIGHT); }
+  { handle_op (args, OP_EQ, OP_RIGHT); }
 #endif
 
   INIT
@@ -502,7 +818,7 @@ PIKECLASS CostFunction {
 
   }
 
-  void handle_func (INT32 args, DoubleTreeNode::FunctionType func_type)
+  void handle_func (INT32 args, FunctionType func_type)
   {
     struct object* new_operand = fast_clone_object (Ceres_Operand_program);
     struct Ceres_Operand_struct* new_op_struct =
@@ -553,49 +869,49 @@ PIKECLASS CostFunction {
   }
 
   PIKEFUN object abs   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_ABS); }
+  { handle_func (args, OP_ABS); }
 
   PIKEFUN object log   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_LOG); }
+  { handle_func (args, OP_LOG); }
 
   PIKEFUN object exp   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_EXP); }
+  { handle_func (args, OP_EXP); }
 
   PIKEFUN object sqrt  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_SQRT); }
+  { handle_func (args, OP_SQRT); }
 
   PIKEFUN object cos   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_COS); }
+  { handle_func (args, OP_COS); }
 
   PIKEFUN object acos  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_ACOS); }
+  { handle_func (args, OP_ACOS); }
 
   PIKEFUN object sin   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_SIN); }
+  { handle_func (args, OP_SIN); }
 
   PIKEFUN object asin  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_ASIN); }
+  { handle_func (args, OP_ASIN); }
 
   PIKEFUN object tan   (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_TAN); }
+  { handle_func (args, OP_TAN); }
 
   PIKEFUN object atan  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_ATAN); }
+  { handle_func (args, OP_ATAN); }
 
   PIKEFUN object sinh  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_SINH); }
+  { handle_func (args, OP_SINH); }
 
   PIKEFUN object cosh  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_COSH); }
+  { handle_func (args, OP_COSH); }
 
   PIKEFUN object tanh  (int|float|object op1)
-  { handle_func (args, DoubleTreeNode::OP_TANH); }
+  { handle_func (args, OP_TANH); }
 
   PIKEFUN object pow   (int|float|object op1, int|float|object op2)
-  { handle_func (args, DoubleTreeNode::OP_POW); }
+  { handle_func (args, OP_POW); }
 
   PIKEFUN object atan2 (int|float|object op1, int|float|object op2)
-  { handle_func (args, DoubleTreeNode::OP_ATAN2); }
+  { handle_func (args, OP_ATAN2); }
 
 }
 
@@ -611,7 +927,8 @@ static int is_ceres_cost_function (struct object* o)
 
 PIKECLASS AutoDiffSolver {
   PIKEFUN array(array(float)) solve (object cost_function,
-				     array(array(float)) initial_params)
+				     array(array(float)) initial_params,
+				     int max_iter)
   {
     if (!is_ceres_cost_function (cost_function))
       SIMPLE_BAD_ARG_ERROR("solve", 1, "Ceres.CostFunction");
@@ -696,6 +1013,7 @@ PIKECLASS AutoDiffSolver {
       ceres::Solver::Options options;
       options.linear_solver_type = ceres::DENSE_QR;
       options.minimizer_progress_to_stdout = false;
+      options.max_num_iterations = max_iter;
       ceres::Solver::Summary summary;
       ceres::Solve(options, &problem, &summary);
 
