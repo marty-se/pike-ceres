@@ -3,6 +3,8 @@
 #include <stack>
 #include <sstream>
 
+#include <thread>
+
 extern "C" {
 #include "global.h"
 #include "module_support.h"
@@ -548,6 +550,27 @@ typedef TreeNode<double> DoubleTreeNode;
 
 static const int kStride = 10;
 
+template <typename T>
+void worker (T const* const* param_blocks, T* residuals,
+	     const std::vector<int32> block_sizes,
+	     const std::vector<DoubleTreeNode*> expr_trees,
+	     int thread_no, int threads_tot)
+{
+  for (int i = 0; i < expr_trees.size(); i++) {
+    if ((i-thread_no) % threads_tot) continue;
+
+    DoubleTreeNode* tree = expr_trees.at (i);
+
+    if (tree == NULL)
+      Pike_error ("Uninitialized residual.\n");
+
+    residuals[i] = tree->Evaluate (param_blocks, block_sizes);
+  }
+}
+
+/* FIXME: Allow runtime configuration. */
+#define NUM_THREADS 2
+
 struct PikeCostFunctor {
 public:
   typedef ceres::DynamicAutoDiffCostFunction<PikeCostFunctor, kStride>
@@ -562,11 +585,21 @@ public:
   template <typename T>
   bool operator()(T const* const* param_blocks, T* residuals) const
   {
-    for (int i = 0; i < expr_trees_.size(); i++) {
-      DoubleTreeNode* tree = expr_trees_.at (i);
+    std::vector<std::thread*> my_threads;
 
-      residuals[i] = tree->Evaluate (param_blocks, block_sizes_);
+    for (int i = 0; i < NUM_THREADS; i++) {
+      std::thread* t =
+	new std::thread (worker<T>, param_blocks, residuals, block_sizes_,
+			 expr_trees_, i, NUM_THREADS);
+      my_threads.push_back (t);
     }
+
+    for (int i = 0; i < my_threads.size(); i++) {
+      std::thread* t = my_threads.at (i);
+      t->join();
+      delete t;
+    }
+
     return true;
   }
 

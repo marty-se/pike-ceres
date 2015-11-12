@@ -6,7 +6,7 @@ MODNAME=Ceres
 # Pike's svalue.h has a couple of defines that lack whitespace between
 # literal and identifier, which isn't compatible with C++11. Disable
 # that warning.
-MODULE_CFLAGS=-std=c++11 -Wno-literal-suffix
+MODULE_CFLAGS=-std=c++11 -pthread -Wno-literal-suffix
 
 MOD_LDSHARED=g++ -shared
 
