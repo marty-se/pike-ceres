@@ -1012,10 +1012,18 @@ PIKECLASS AutoDiffSolver {
 
       ceres::Solver::Options options;
       options.linear_solver_type = ceres::DENSE_QR;
-      options.minimizer_progress_to_stdout = false;
+
+#ifdef CERES_DEBUG
+      options.minimizer_progress_to_stdout = true;
+#endif
+
       options.max_num_iterations = max_iter;
       ceres::Solver::Summary summary;
       ceres::Solve(options, &problem, &summary);
+
+#ifdef CERES_DEBUG
+      std::cout << summary.BriefReport() << "\n";
+#endif
 
       for (unsigned int i = 0; i < block_sizes_vect.size(); i++) {
 	int block_size = block_sizes_vect[i];
